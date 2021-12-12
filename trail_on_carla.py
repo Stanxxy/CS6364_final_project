@@ -7,7 +7,7 @@ import os
 import sys
 import numpy as np
 import cv2
-import subprocess
+# import subprocess
 import multiprocessing
 # my_queue = Manager().Queue()
 

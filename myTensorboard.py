@@ -1,5 +1,7 @@
 from keras.callbacks import TensorBoard
 import tensorflow as tf
+
+
 # Own Tensorboard class
 
 

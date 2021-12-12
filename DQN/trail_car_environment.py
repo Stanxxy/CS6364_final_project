@@ -109,6 +109,17 @@ class CarEnv:
         self.sensor_list.append(self.colsensor)
         self.colsensor.listen(lambda event: self.collision_data(event))
 
+        self.lane_cross_hist = []
+
+        lane_cross_sensor = self.world.get_blueprint_library().find(
+            'sensor.other.lane_invasion')
+        self.lane_cross_sensor = self.world.spawn_actor(
+            lane_cross_sensor, transform, attach_to=self.vehicle)
+        self.actor_list.append(self.lane_cross_sensor)
+        self.sensor_list.append(self.lane_cross_sensor)
+        self.lane_cross_sensor.listen(
+            lambda event: self.lane_cross_data(event))
+
         while self.front_camera is None:
             time.sleep(0.01)
 
@@ -131,9 +142,13 @@ class CarEnv:
             self.queue.put(i3)
             # cv2.imshow("",i3)
             # cv2.waitKey(1)
-        self.front_camera = i3
+        self.front_camera = i3.reshape(3, self.im_height, self.im_width)
+
+    def lane_cross_data(self, event):
+        self.lane_cross_hist.append(event)
 
     def step(self, action):
+        # print("steped. action {}".format(action))
         # TODO: have more actions. Control throttle, steer and break saperatly.
         '''
         For now let's just pass steer left, center, right?
@@ -154,15 +169,22 @@ class CarEnv:
 
         if len(self.collision_hist) != 0:
             done = True
+            reward = -1000
+
+        if len(self.lane_cross_hist) != 0:
+            # We need to punish but there's no need to stop the game
+            done = True if len(self.collision_hist) > 0 else False
             reward = -200
+
         elif kmh < 50:
             done = False
-            reward = -1
+            reward = - (kmh / 10)
         else:
             done = False
             reward = 1
 
         if self.episode_start + SECONDS_PER_EPISODE < time.time():
+            print("time is over")
             done = True
 
         return self.front_camera, reward, done, None  # state, reward, done, other_info
