@@ -44,6 +44,7 @@ class CarEnv:
     def __init__(self, queue=None):
         self.client = carla.Client('localhost', 2000)
         self.client.set_timeout(4.0)
+        self.frame = None
 
         # Once we have a client we can retrieve the world that is currently
         # running.
@@ -69,6 +70,14 @@ class CarEnv:
         self.lane_cross_hist = []
         self.actor_list = []
         self.sensor_list = []  # use a sensor slist to stop before the object is recycled
+        self._queues = []
+
+        settings = self.world.get_settings()
+        settings.synchronous_mode = True
+        self.frame = self.world.apply_settings(carla.WorldSettings(
+            no_rendering_mode=False,
+            synchronous_mode=True,
+            fixed_delta_seconds=1/20.0))
 
         self.transform = random.choice(self.world.get_map().get_spawn_points())
         while self.vehicle is None:
@@ -94,7 +103,7 @@ class CarEnv:
         self.actor_list.append(self.sensor)
         self.sensor_list.append(self.sensor)
 
-        self.sensor.listen(lambda data: self.process_img(data))
+        # self.sensor.listen(lambda data: self.process_img(data))
         # initially passing some commands seems to help with time. Not sure why.
         self.vehicle.apply_control(
             carla.VehicleControl(throttle=0.0, brake=0.0))
@@ -109,17 +118,26 @@ class CarEnv:
             colsensor, transform, attach_to=self.vehicle)
         self.actor_list.append(self.colsensor)
         self.sensor_list.append(self.colsensor)
-        self.colsensor.listen(lambda event: self.collision_data(event))
+        # self.colsensor.listen(lambda event: self.collision_data(event))
 
         lane_cross_sensor = self.world.get_blueprint_library().find('sensor.other.lane_invasion')
         self.lane_cross_sensor = self.world.spawn_actor(
             lane_cross_sensor, transform, attach_to=self.vehicle)
         self.actor_list.append(self.lane_cross_sensor)
         self.sensor_list.append(self.lane_cross_sensor)
-        self.lane_cross_sensor.listen(lambda event: self.lane_cross_data(event))
+        # self.lane_cross_sensor.listen(lambda event: self.lane_cross_data(event))
 
-        while self.front_camera is None:
-            time.sleep(0.01)
+        def make_queue(register_event):
+            q = queue.Queue()
+            register_event(q.put)
+            self._queues.append(q)
+
+        make_queue(self.world.on_tick)
+        for sensor in self.sensor_list:
+            make_queue(sensor.listen)
+
+        # while self.front_camera is None:
+        #     time.sleep(0.01)
 
 
         self.episode_start = time.time()
@@ -127,7 +145,23 @@ class CarEnv:
         self.vehicle.apply_control(
             carla.VehicleControl(brake=0.0, throttle=0.0))
 
-        return self.front_camera
+        # return self.front_camera
+
+    def tick(self, timeout):
+        self.frame = self.world.tick()
+        data = [self._retrieve_data(q, timeout) for q in self._queues]
+        assert all(x is None or x.frame == self.frame for x in data)
+        return tuple(data)
+
+    def _retrieve_data(self, sensor_queue, timeout):
+        while True:
+            try:
+                data = sensor_queue.get(timeout=timeout)
+                if data.frame == self.frame:
+                    return data
+            except:
+                return None
+
 
     def collision_data(self, event):
         self.collision_hist.append(event)
@@ -137,16 +171,20 @@ class CarEnv:
         if "Solid" in lane_type or "NONE" in lane_type or "Grass" in lane_type or "Curb" in lane_type or "Other" in lane_type:
             self.lane_cross_hist.append(event)
 
+    def is_invalid(self, event):
+        lane_type = str(event.crossed_lane_markings[0].type)
+        return "Solid" in lane_type or "NONE" in lane_type or "Grass" in lane_type or "Curb" in lane_type or "Other" in lane_type
+
     def process_img(self, image):
+        if image is None:
+            return None
         i = np.array(image.raw_data)
         #np.save("iout.npy", i)
         i2 = i.reshape((self.im_height, self.im_width, 4))
         i3 = i2[:, :, :3]
-        # if self.queue is not None and self.SHOW_CAM and self.queue.qsize() <= 1024:
-        #     self.queue.put(i3)
-            # cv2.imshow("",i3)
-            # cv2.waitKey(1)
-        self.front_camera = i3
+        # cv.imshow("Carla Env", self.process_image(i3, "semantic_segmentation"))
+        # cv.waitKey(1)
+        return i3
 
     def process_image(self, image, type="rgb"):
         frame = image.copy()
@@ -190,16 +228,12 @@ class CarEnv:
         v = self.vehicle.get_velocity()
         kmh = int(3.6 * np.sqrt(v.x**2 + v.y**2 + v.z**2))
 
-        if len(self.collision_hist) != 0:
-            # print("Collision")
-            # cv.imshow("Img Collision", self.process_image(self.front_camera, "semantic_segmentation"))
-            # cv.waitKey(0)
+        world, next_state, obj_col, lane_col = self.tick(1.0)
+
+        if obj_col is not None:
             done = True
             reward = -200
-        elif len(self.lane_cross_hist) != 0:
-            # print("Lane Cross")
-            # cv.imshow("Img Lane Cross", self.process_image(self.front_camera, "semantic_segmentation"))
-            # cv.waitKey(0)
+        elif lane_col is not None and self.is_invalid(lane_col):
             done = True
             reward = -200
         elif kmh < 50:
@@ -212,7 +246,7 @@ class CarEnv:
         if self.episode_start + SECONDS_PER_EPISODE < time.time():
             done = True
 
-        return self.front_camera, reward, done, None  # state, reward, done, other_info
+        return self.process_img(next_state), reward, done, None  # state, reward, done, other_info
 
     def __del__(self):
         print("destroying actors")

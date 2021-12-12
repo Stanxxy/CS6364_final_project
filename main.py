@@ -20,14 +20,13 @@ from itertools import count
 
 print("Torch Version:", torch.__version__)
 
-BATCH_SIZE = 128
-GAMMA = 0.999
+BATCH_SIZE = 40
+GAMMA = 0.99
 EPS_START = 1.0
 EPS_END = 0.05
 EPS_DECAY = 200
-TARGET_UPDATE = 10
-NUM_EPISODES = 50
-NUM_EPISODES = 10
+TARGET_UPDATE = 4
+NUM_EPISODES = 200
 MAX_TIME_STEP = 10000
 
 # if gpu is to be used
@@ -49,12 +48,26 @@ screen_height, screen_width = env.im_height, env.im_width
 # n_actions = env.action_space.n
 n_actions = 3
 
+def init_model(layer):
+    if isinstance(layer, nn.Conv2d):
+        nn.init.kaiming_normal_(layer.weight.data, nonlinearity='relu')
+        if layer.bias is not None:
+            nn.init.constant_(layer.bias.data, 0)
+    elif isinstance(layer, nn.BatchNorm2d):
+        nn.init.constant_(layer.weight.data, 1)
+        nn.init.constant_(layer.bias.data, 0)
+    elif isinstance(layer, nn.Linear):
+        nn.init.kaiming_uniform_(layer.weight.data)
+        nn.init.constant_(layer.bias.data, 0)
+
 policy_net = DQN(screen_height, screen_width, n_actions).to(device)
 target_net = DQN(screen_height, screen_width, n_actions).to(device)
+
+policy_net.apply(init_model)
 target_net.load_state_dict(policy_net.state_dict())
 target_net.eval()
 
-optimizer = optim.RMSprop(policy_net.parameters(), lr=1e-5)
+optimizer = optim.Adam(policy_net.parameters(), lr=1e-6)
 memory = ReplayMemory(10000)
 
 
@@ -93,6 +106,7 @@ def optimize_model():
     if len(memory) < BATCH_SIZE:
         return
     
+    optimizer.zero_grad()
     transitions = memory.sample(BATCH_SIZE)
     # Transpose the batch (see https://stackoverflow.com/a/19343/3343043 for
     # detailed explanation). This converts batch-array of Transitions
@@ -147,14 +161,13 @@ def optimize_model():
     # print(loss)
 
     # Optimize the model
-    optimizer.zero_grad()
     loss.backward()
-    for param in policy_net.parameters():
-        param.grad.data.clamp_(-1, 1)
+    # for param in policy_net.parameters():
+    #     param.grad.data.clamp_(-1, 1)
     optimizer.step()
 
 def process_image(image, type="rgb"):
-    frame = image
+    frame = image.copy()
     if type == "rgb":
         pass
     elif type == "semantic_segmentation":
@@ -176,17 +189,25 @@ def process_image(image, type="rgb"):
 
 episode_durations = []
 for episode in range(1, NUM_EPISODES + 1):
-    # print("="*100)
     # Initialize the environment and state
     start_time = time.time()
-    curr_state = env.reset()
+    env.reset()
     time.sleep(1)
 
+    world, curr_state, obj_col, lane_col = env.tick(1.0)
+    curr_state = env.process_img(curr_state)
+
     for t in range(MAX_TIME_STEP):
+        # if t % 10 == 0:
+        #     print(f"Episode: {episode}, Time: {t}", flush=True)
+        img_for_show = curr_state
         curr_state = curr_state.reshape((1, 3, 400, 600))
         action_tensor = select_action(curr_state)
         action = action_tensor.item()
         next_state, reward, done, _ = env.step(action)
+
+        if next_state is None:
+            continue
 
         # Convert step output to tensors
         curr_state_tensor = torch.tensor(curr_state.reshape((1, 3, 400, 600)), dtype=torch.float)
@@ -195,12 +216,13 @@ for episode in range(1, NUM_EPISODES + 1):
         reward_tensor = torch.tensor([reward], dtype=torch.float).reshape((1, -1))
         # Save state data to memory
         memory.push(curr_state_tensor, action_tensor, next_state_tensor, reward_tensor)
+        
+        # cv.imshow("Image", process_image(img_for_show, "semantic_segmentation"))
+        # cv.waitKey(1)
 
         # Update State
         curr_state = next_state
 
-        # cv.imshow("Image", process_image(curr_state, "semantic_segmentation"))
-        # cv.waitKey(1)
 
         optimize_model()
         if t + 1 == MAX_TIME_STEP:
@@ -213,6 +235,7 @@ for episode in range(1, NUM_EPISODES + 1):
             break
 
     # Destroy an actor at end of episode
+    # cv.destroyAllWindows()
     for sensor in env.sensor_list:
         sensor.stop()
     env.client.apply_batch([carla.command.DestroyActor(x)
@@ -224,160 +247,3 @@ for episode in range(1, NUM_EPISODES + 1):
 print('Complete')
 plot_durations()
 plt.show()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#     last_screen = env.get_screen()
-#     current_screen = get_screen()
-#     state = current_screen - last_screen
-#     for t in count():
-#         # Select and perform an action
-#         action = select_action(state)
-#         _, reward, done, _ = env.step(action.item())
-#         reward = torch.tensor([reward], device=device)
-
-#         # Observe new state
-#         last_screen = current_screen
-#         current_screen = get_screen()
-#         if not done:
-#             next_state = current_screen - last_screen
-#         else:
-#             next_state = None
-
-#         # Store the transition in memory
-#         memory.push(state, action, next_state, reward)
-
-#         # Move to the next state
-#         state = next_state
-
-#         # Perform one step of the optimization (on the policy network)
-#         optimize_model()
-#         if done:
-#             episode_durations.append(t + 1)
-#             plot_durations()
-#             break
-#     # Update the target network, copying all weights and biases in DQN
-#     if i_episode % TARGET_UPDATE == 0:
-#         target_net.load_state_dict(policy_net.state_dict())
-
-# print('Complete')
-# env.render()
-# env.close()
-# plt.ioff()
-# plt.show()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-###################################################################################
-###################################################################################
-###################################################################################
-# NUM_ROWS = 720
-# NUM_COLS = 1280
-# NUM_ACTIONS = 4
-# NUM_EPISODES = 100
-# MAX_TIME_STEPS = 1000
-# BATCH_SIZE = 128
-# EPSILON = 1.0
-# EPSILON_END = 0.05
-# EPSILON_DECAY = 0.0001
-# UPDATE_RATE = 10
-# UPDATE_RATE = 10
-
-# def copy_state(policy_net, target_net):
-#     target_net.load_state_dict(policy_net.state_dict())
-
-# def get_action(state, network):
-#     rand = random.random()
-#     if rand > EPSILON:
-#         with torch.no_grad():
-#             action = network(state).max(1)
-#     else:
-#         action = torch.tensor([random.randrange(NUM_ACTIONS)])
-
-#     print(action)
-#     EPSILON = EPSILON - EPSILON_DECAY
-#     return action
-
-# def train_model():
-#     pass
-
-# # Define networks, criterion and optimizer
-# policy_net = DeepQNetwork(rows=NUM_ROWS, cols=NUM_COLS, outputs=NUM_ACTIONS)
-# target_net = DeepQNetwork(rows=NUM_ROWS, cols=NUM_COLS, outputs=NUM_ACTIONS)
-# criterion = nn.SmoothL1Loss()
-# optimizer = optim.Adam(policy_net.parameters())
-
-# # Target net does not need to calculate gradients, so we set it in eval mode
-# copy_state(policy_net, target_net)
-# target_net.eval()
-
-# replay_memory = ReplayMemory(10000)
-
-
-
-# # Train network
-# duration_hist = []
-# for episode in range(1, NUM_EPISODES+1):
-#     last_img = carla_env.get_frame()
-#     curr_img = carla_env.get_frame()
-#     for time in range(MAX_TIME_STEPS):
-#         curr_action = get_action(state, policy_net)
-
-#         reward, is_done = carla_env.step(curr_action)
-
-
-#         last_img = curr_img
-#         curr_img = carla_env.get_frame()
-#         if not is_done:
-#             next_state = curr_img - last_img
-#         else:
-#             next_state = None
-
-#         replay_memory.push((state, action, next_state, reward))
-#         state = next_state
-
-#         train_model()
-#         if is_done:
-#             duration_hist.append(time + 1)
-#             break
-
-#     if episode % UPDATE_RATE == 0:
-#         copy_state(policy_net, target_net)
