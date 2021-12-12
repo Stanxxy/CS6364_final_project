@@ -182,6 +182,7 @@ class Producer(multiprocessing.Process):
                 epsilon = max(MIN_EPSILON, epsilon)
 
         # Set termination flag for training thread and wait for it to finish
+        print("Sent flag")
         agent.terminate = True
         trainer_thread.join()
         torch.save(agent.model.state_dict(), f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_\
