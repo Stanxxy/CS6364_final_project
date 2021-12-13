@@ -99,7 +99,6 @@ class CarEnv:
 
         # sleep to get things started and to not detect a collision when the car spawns/falls from sky.
         # while self.front_camera is None:
-        #     time.sleep(0.01)
         time.sleep(2)
 
         colsensor = self.world.get_blueprint_library().find('sensor.other.collision')

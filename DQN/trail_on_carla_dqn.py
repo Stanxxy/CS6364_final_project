@@ -81,8 +81,8 @@ class Producer(multiprocessing.Process):
         # Create models folder
         if not os.path.isdir('models'):
             os.makedirs('models')
-        else:
-            agent.model.load_state_dict()
+        elif not model_path is None:
+            agent.model.load_state_dict(torch.load(model_path))
         # Create agent and environment
         env = CarEnv(self.queue)
 
@@ -184,6 +184,10 @@ class Producer(multiprocessing.Process):
 
 
 if __name__ == "__main__":
+    try:
+        model_path = sys.argv[1]
+    except:
+        model_path = None
     queue = multiprocessing.Queue()
     process_producer = Producer(queue)
     process_consumer = Consumer(queue)

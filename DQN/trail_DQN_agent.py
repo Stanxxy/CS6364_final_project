@@ -5,25 +5,15 @@ import os
 import sys
 import time
 import random
-# import tensorflow as tf
 import torch
 from torch import nn
 
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
-# from myTensorboard import ModifiedTensorBoard
-
-# from keras.applications.xception import Xception
-# from keras.layers import Dense, GlobalAveragePooling2D
-# from keras.optimizers import Adam
 from torch.optim import Adam
 # from keras.models import Model
 import torchvision.models as models
 from trail_car_environment import IM_HEIGHT, IM_WIDTH
-
-# gpu_devices = tf.config.experimental.list_physical_devices('GPU')
-# for device in gpu_devices:
-#     tf.config.experimental.set_memory_growth(device, True)
 
 
 carla_abs_path = "/home/stan/Documents/Assighments/CS6364/final_project"
@@ -98,12 +88,12 @@ class DQNAgent:
             self.model.train()
             minibatch = random.sample(self.replay_memory, MINIBATCH_SIZE)
             current_states = torch.FloatTensor(np.array(
-                [transition[0] for transition in minibatch])/255)  # .to('cuda')
+                [transition[0] for transition in minibatch])/255)
 
             current_qs_list = self.model.forward(current_states)
 
             new_current_states = torch.FloatTensor(np.array(
-                [transition[3] for transition in minibatch])/255)  # .to('cuda')
+                [transition[3] for transition in minibatch])/255)
 
             future_qs_list = self.target_model.forward(new_current_states)
 
