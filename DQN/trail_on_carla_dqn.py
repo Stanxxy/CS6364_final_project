@@ -76,20 +76,14 @@ class Producer(multiprocessing.Process):
 
         # Memory fraction, used mostly when training multiple agents
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # for device in gpu_devices:
-        #     tf.config.experimental.set_memory_growth(device, True)
         torch.cuda.set_per_process_memory_fraction(MEMORY_FRACTION, 0)
-        # gpu_options = tf.GPUOptions(
-        #     per_process_gpu_memory_fraction=MEMORY_FRACTION)
-        # backend.set_session(tf.Session(
-        #     config=tf.ConfigProto(gpu_options=gpu_options)))
-
+        agent = DQNAgent()
         # Create models folder
         if not os.path.isdir('models'):
             os.makedirs('models')
-
+        else:
+            agent.model.load_state_dict()
         # Create agent and environment
-        agent = DQNAgent()
         env = CarEnv(self.queue)
 
         # Start training thread and wait for training to be initialized
@@ -173,8 +167,8 @@ class Producer(multiprocessing.Process):
                 # Save model, but only when min reward is greater or equal a set value
                 if min_reward >= MIN_REWARD:
                     torch.save(agent.model.state_dict(),
-                               f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_\
-                        {average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+                               f'models/{MODEL_NAME}--{max_reward:_>7.2f}max_\
+                                   {average_reward:_>7.2f}-avg_{min_reward:_>7.2f}-min_{int(time.time())}.model')
 
             # Decay epsilon
             if epsilon > MIN_EPSILON:
@@ -185,8 +179,8 @@ class Producer(multiprocessing.Process):
         print("Sent flag")
         agent.terminate = True
         trainer_thread.join()
-        torch.save(agent.model.state_dict(), f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_\
-            {average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+        torch.save(agent.model.state_dict(), f'models/{MODEL_NAME}--{max_reward:_>7.2f}max_\
+            {average_reward:_>7.2f}-avg_{min_reward:_>7.2f}-min_{int(time.time())}.model')
 
 
 if __name__ == "__main__":
