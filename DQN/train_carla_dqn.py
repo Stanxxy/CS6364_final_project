@@ -1,10 +1,10 @@
-# import matplotlib.pyplot as plt
+
 import ctypes
-from trail_car_environment import CarEnv
-from trail_DQN_agent import DQNAgent, MODEL_NAME
+
+from numpy.lib.type_check import imag
+from basic_car_environment import CarEnv
+from DQN_agent import DQNAgent, MODEL_NAME
 from threading import Thread
-# import keras.backend.tensorflow_backend as backend
-# import tensorflow as tf
 import torch
 import random
 import glob
@@ -30,10 +30,6 @@ except IndexError:
     pass
 
 
-# gpu_devices = tf.config.experimental.list_physical_devices('GPU')
-# for device in gpu_devices:
-#     tf.config.experimental.set_memory_growth(device, True)
-
 class Consumer(multiprocessing.Process):
     def __init__(self, queue):
         multiprocessing.Process.__init__(self)
@@ -41,10 +37,10 @@ class Consumer(multiprocessing.Process):
 
     def run(self):
         while True:
-            image = self.queue.get()
+            image = self.queue.get(timeout=30)
             if type(image) is str:
-                break
-            if not image is None and len(image) > 0:
+                return
+            if len(image) > 0:
                 cv2.imshow("Frame", image)
                 cv2.waitKey(1)
 
@@ -56,7 +52,7 @@ class Producer(multiprocessing.Process):
 
     def run(self):
         MEMORY_FRACTION = 0.3
-        EPISODES = 100
+        EPISODES = 10
 
         epsilon = 1.0
         EPSILON_DECAY = 0.95  # 0.9975 99975
@@ -70,14 +66,14 @@ class Producer(multiprocessing.Process):
         ep_rewards = [-200]
 
         # For more repetitive results
-        random.seed(1)
+        # random.seed(1)
         np.random.seed(1)
         torch.manual_seed(1)
 
         # Memory fraction, used mostly when training multiple agents
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         torch.cuda.set_per_process_memory_fraction(MEMORY_FRACTION, 0)
-        agent = DQNAgent()
+        agent = DQNAgent(device)
         # Create models folder
         if not os.path.isdir('models'):
             os.makedirs('models')
@@ -156,19 +152,14 @@ class Producer(multiprocessing.Process):
                     ep_rewards[-AGGREGATE_STATS_EVERY:])/len(ep_rewards[-AGGREGATE_STATS_EVERY:])
                 min_reward = min(ep_rewards[-AGGREGATE_STATS_EVERY:])
                 max_reward = max(ep_rewards[-AGGREGATE_STATS_EVERY:])
-                agent.writer.add_scalars('reward', {'reward_avg': average_reward,
-                                                    'reward_min': min_reward,
-                                                    'reward_max': max_reward}, agent.step)
-                # agent.writer.add_scalars(
-                #     'epsilon', torch.IntTensor([epsilon]), agent.step)
-                # agent.tensorboard.update_stats(
-                #     reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon)
+                agent.writer.add_scalars('reward', {'avg': average_reward,
+                                                    'min': min_reward,
+                                                    'max': max_reward}, agent.step)
 
                 # Save model, but only when min reward is greater or equal a set value
                 if min_reward >= MIN_REWARD:
                     torch.save(agent.model.state_dict(),
-                               f'models/{MODEL_NAME}--{max_reward:_>7.2f}max_\
-                                   {average_reward:_>7.2f}-avg_{min_reward:_>7.2f}-min_{int(time.time())}.model')
+                               f'models/{MODEL_NAME}--{max_reward:_>7.2f}max_{average_reward:_>7.2f}-avg_{min_reward:_>7.2f}-min_{int(time.time())}.model')
 
             # Decay epsilon
             if epsilon > MIN_EPSILON:
@@ -176,11 +167,13 @@ class Producer(multiprocessing.Process):
                 epsilon = max(MIN_EPSILON, epsilon)
 
         # Set termination flag for training thread and wait for it to finish
-        print("Sent flag")
+
         agent.terminate = True
         trainer_thread.join()
-        torch.save(agent.model.state_dict(), f'models/{MODEL_NAME}--{max_reward:_>7.2f}max_\
-            {average_reward:_>7.2f}-avg_{min_reward:_>7.2f}-min_{int(time.time())}.model')
+        print("training thread joined")
+        torch.save(agent.model.state_dict(
+        ), f'models/{MODEL_NAME}--{max_reward:_>7.2f}max_{average_reward:_>7.2f}-avg_{min_reward:_>7.2f}-min_{int(time.time())}.model')
+        self.queue.put("end")
 
 
 if __name__ == "__main__":

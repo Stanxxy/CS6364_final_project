@@ -1,15 +1,15 @@
 # import matplotlib.pyplot as plt
 import ctypes
-from trail_car_environment import CarEnv
-from trail_DQN_agent import DQNAgent, MODEL_NAME
-from threading import Thread
-import keras.backend.tensorflow_backend as backend
-import tensorflow as tf
+from torch.autograd import Variable
+from car_environment import CarEnv
+from critic_agent import PolicyAgent, MODEL_NAME
+from actor_agent import DQN, MODEL_NAME
 import random
 import glob
 import os
 import sys
 import time
+import torch
 import numpy as np
 from tqdm import tqdm
 import carla
@@ -40,10 +40,13 @@ class Consumer(multiprocessing.Process):
 
     def run(self):
         while True:
-            image = self.queue.get()
+            try:
+                image = self.queue.get(timeout=30)
+            except:
+                return
             if type(image) is str:
-                break
-            if not image is None and len(image) > 0:
+                return
+            if len(image) > 0:
                 cv2.imshow("Frame", image)
                 cv2.waitKey(1)
 
@@ -54,10 +57,11 @@ class Producer(multiprocessing.Process):
         self.queue = queue
 
     def run(self):
-        MEMORY_FRACTION = 0.3
+        MAX_SIZE = 32
+        MEMORY_FRACTION = 1.0
         EPISODES = 100
 
-        epsilon = 1.0
+        epsilon = 0.1
         EPSILON_DECAY = 0.95  # 0.9975 99975
         MIN_EPSILON = 0.001
 
@@ -69,36 +73,32 @@ class Producer(multiprocessing.Process):
         ep_rewards = [-200]
 
         # For more repetitive results
-        random.seed(1)
+        # random.seed(1)
         np.random.seed(1)
-        tf.set_random_seed(1)
+        torch.manual_seed(1)
 
         # Memory fraction, used mostly when training multiple agents
-        gpu_devices = tf.config.experimental.list_physical_devices('GPU')
-        for device in gpu_devices:
-            tf.config.experimental.set_memory_growth(device, True)
-        gpu_options = tf.GPUOptions(
-            per_process_gpu_memory_fraction=MEMORY_FRACTION)
-        backend.set_session(tf.Session(
-            config=tf.ConfigProto(gpu_options=gpu_options)))
-
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        torch.cuda.set_per_process_memory_fraction(MEMORY_FRACTION, 0)
+        agent = PolicyAgent(device)
         # Create models folder
         if not os.path.isdir('models'):
             os.makedirs('models')
-
+        elif not model_path is None:
+            agent.model.load_state_dict(torch.load(model_path))
         # Create agent and environment
-        agent = DQNAgent()
         env = CarEnv(self.queue)
 
-        # Start training thread and wait for training to be initialized
-        trainer_thread = Thread(target=agent.train_in_loop, daemon=True)
-        trainer_thread.start()
-        while not agent.training_initialized:
-            time.sleep(0.01)
+        # This time is not possible to use replay method since we are using a policy net
+        # trainer_thread = Thread(target=agent.train_in_loop, daemon=True)
+        # trainer_thread.start()
+
+        agent.init_model()
+        # agent.training_initialized = True
 
         # Initialize predictions - forst prediction takes longer as of initialization that has to be done
         # It's better to do a first prediction then before we start iterating over episode steps
-        agent.get_qs(np.ones((env.im_height, env.im_width, 3)))
+        # agent.get_action(np.ones((env.im_height, env.im_width, 3)))
 
         # Iterate over episodes
         for episode in tqdm(range(1, EPISODES + 1), unit='episodes'):
@@ -106,7 +106,7 @@ class Producer(multiprocessing.Process):
             env.collision_hist = []
 
             # Update tensorboard step every episode
-            agent.tensorboard.step = episode
+            agent.step = episode
 
             # Restarting episode - reset episode reward and step number
             episode_reward = 0
@@ -117,18 +117,21 @@ class Producer(multiprocessing.Process):
 
             # Reset flag and start iterating until episode ends
             done = False
-            episode_start = time.time()
-
+            agent.rewards = []
+            agent.probs = []
             # Play for given number of seconds only
-            while True:
+            while len(agent.probs) < MAX_SIZE:
 
                 # This part stays mostly the same, the change is to query a model for Q values
                 if np.random.random() > epsilon:
                     # Get action from Q table
-                    action = np.argmax(agent.get_qs(current_state))
+                    action, ln_prob = agent.get_action(current_state)
+
                 else:
                     # Get random action
-                    action = np.random.randint(0, 3)
+                    # modify action to have contineous result
+                    action, ln_prob = agent.get_action(
+                        current_state, is_random=True)
                     # This takes no time, so we add a delay matching 60 FPS (prediction above takes longer)
                     time.sleep(1/FPS)
 
@@ -137,9 +140,8 @@ class Producer(multiprocessing.Process):
                 # Transform new continous state to new discrete state and count reward
                 episode_reward += reward
 
-                # Every step we update replay memory
-                agent.update_replay_memory(
-                    (current_state, action, reward, new_state, done))
+                # Every step we update record memory
+                agent.update_record_memory(reward, ln_prob)
 
                 current_state = new_state
                 step += 1
@@ -147,11 +149,10 @@ class Producer(multiprocessing.Process):
                 if done:
                     break
 
+            agent.train()
+
             # End of episode - destroy agents
-            for sensor in env.sensor_list:
-                sensor.stop()
-            env.client.apply_batch([carla.command.DestroyActor(x)
-                                    for x in env.actor_list])
+            env.clear_all()
 
             # Append episode reward to a list and log stats (every given number of episodes)
             ep_rewards.append(episode_reward)
@@ -160,28 +161,33 @@ class Producer(multiprocessing.Process):
                     ep_rewards[-AGGREGATE_STATS_EVERY:])/len(ep_rewards[-AGGREGATE_STATS_EVERY:])
                 min_reward = min(ep_rewards[-AGGREGATE_STATS_EVERY:])
                 max_reward = max(ep_rewards[-AGGREGATE_STATS_EVERY:])
-                agent.tensorboard.update_stats(
-                    reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon)
+                agent.writer.add_scalars('reward', {'avg': average_reward,
+                                                    'min': min_reward,
+                                                    'max': max_reward}, agent.step)
 
                 # Save model, but only when min reward is greater or equal a set value
                 if min_reward >= MIN_REWARD:
-                    agent.model.save(
-                        f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_\
-                        {average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+                    torch.save(agent.model.state_dict(),
+                               f'models/{MODEL_NAME}--{max_reward:_>7.2f}max_{average_reward:_>7.2f}-avg_{min_reward:_>7.2f}-min_{int(time.time())}.model')
 
             # Decay epsilon
             if epsilon > MIN_EPSILON:
                 epsilon *= EPSILON_DECAY
                 epsilon = max(MIN_EPSILON, epsilon)
 
-        # Set termination flag for training thread and wait for it to finish
         agent.terminate = True
-        trainer_thread.join()
-        agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_\
-            {average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+        # trainer_thread.join()
+        # print("training thread joined")
+        torch.save(agent.model.state_dict(
+        ), f'models/{MODEL_NAME}--{max_reward:_>7.2f}max_{average_reward:_>7.2f}-avg_{min_reward:_>7.2f}-min_{int(time.time())}.model')
+        self.queue.put("end")
 
 
 if __name__ == "__main__":
+    try:
+        model_path = sys.argv[1]
+    except:
+        model_path = None
     queue = multiprocessing.Queue()
     process_producer = Producer(queue)
     process_consumer = Consumer(queue)

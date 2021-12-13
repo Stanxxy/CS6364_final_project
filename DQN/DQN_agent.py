@@ -11,9 +11,8 @@ from torch import nn
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
-# from keras.models import Model
 import torchvision.models as models
-from trail_car_environment import IM_HEIGHT, IM_WIDTH
+from basic_car_environment import IM_HEIGHT, IM_WIDTH
 
 
 carla_abs_path = "/home/stan/Documents/Assighments/CS6364/final_project"
@@ -33,15 +32,16 @@ PREDICTION_BATCH_SIZE = 1
 # TRAINING_BATCH_SIZE = MINIBATCH_SIZE  # // 4
 UPDATE_TARGET_EVERY = 5
 
-EPISODES = 100
+EPISODES = 10
 
 DISCOUNT = 0.90
 
 
 class DQNAgent:
 
-    def __init__(self, alpha=0.001, action_state_num=3):
+    def __init__(self, device, alpha=0.001, action_state_num=3):
         self.alpha = alpha
+        self.device = device
         self.model = self.create_model(action_state_num)
         self.target_model = self.create_model(action_state_num)
         self.target_model.eval()
@@ -66,15 +66,6 @@ class DQNAgent:
     def create_model(self, output_dim):
         model = models.inception_v3(
             pretrained=False, num_classes=output_dim, aux_logits=False)
-        # when do image processing do remember to modify image to 3 * H * W not H * W * 3
-        # Xception(weights=None, include_top=False,
-        #   input_shape=(IM_HEIGHT, IM_WIDTH, 3))
-
-        # x = base_model.output
-        # x = GlobalAveragePooling2D()(x)
-
-        # predictions = Dense(3, activation="linear")(x)
-        # model = Model(inputs=base_model.input, outputs=predictions)
         return model
 
     def update_replay_memory(self, transition):
@@ -86,7 +77,11 @@ class DQNAgent:
             return
         else:
             self.model.train()
+            if self.terminate:
+                print("terminated")
             minibatch = random.sample(self.replay_memory, MINIBATCH_SIZE)
+            if self.terminate:
+                print("sampled before terminated")
             current_states = torch.FloatTensor(np.array(
                 [transition[0] for transition in minibatch])/255)
 
@@ -96,7 +91,8 @@ class DQNAgent:
                 [transition[3] for transition in minibatch])/255)
 
             future_qs_list = self.target_model.forward(new_current_states)
-
+            if self.terminate:
+                print("forward to obtain q values before terminated")
             y_pred = current_qs_list.max(1)[0]
             y_target = future_qs_list.max(1)[0]
 
@@ -113,6 +109,9 @@ class DQNAgent:
                 log_this_step = True
                 self.last_logged_episode = self.step
 
+            if self.terminate:
+                print("loss computed before terminated")
+
             loss = self.criterion(y_pred, y_target)
             l = loss.item()
 
@@ -121,6 +120,9 @@ class DQNAgent:
 
             # perform a backward pass (backpropagation)
             loss.backward()
+
+            if self.terminate:
+                print("backward done before terminated")
 
             # Update the parameters
             self.optimizer.step()
@@ -158,12 +160,10 @@ class DQNAgent:
         # Update the parameters
         self.optimizer.step()
 
-        # with self.graph.as_default():
-        #     self.model.fit(X, y, verbose=False, batch_size=1)
-
         self.training_initialized = True
 
         while True:
+            # print(self.terminate)
             if self.terminate:
                 return
             self.train()

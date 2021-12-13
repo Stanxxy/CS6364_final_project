@@ -67,25 +67,34 @@ class CarEnv:
         self.collision_hist = []
         self.actor_list = []
         self.sensor_list = []  # use a sensor slist to stop before the object is recycled
-
         self.transform = random.choice(self.world.get_map().get_spawn_points())
+        # print(self.transform)
+        counter = 0
         while self.vehicle is None:
             try:
                 self.vehicle = self.world.spawn_actor(
                     self.model_3, self.transform)
             except:
-                pass
+                print("spawn failed")
+                counter += 1
+                if counter > 32:
+                    self.queue.put("end")
+                    exit()
+                else:
+                    pass
 
         self.actor_list.append(self.vehicle)
 
         self.rgb_cam = self.world.get_blueprint_library().find('sensor.camera.rgb')
-
+        # TODO: We need depth camera here
+        # self.depth_cam = self.world.get_blueprint_library().find('sensor.camera.rgb')
+        # TODO: also config depth camera here
         self.rgb_cam.set_attribute('image_size_x', f'{self.im_width}')
         self.rgb_cam.set_attribute('image_size_y', f'{self.im_height}')
         self.rgb_cam.set_attribute('fov', '110')
 
         transform = carla.Transform(carla.Location(x=2.5, z=0.7))
-
+        #
         self.sensor = self.world.spawn_actor(
             self.rgb_cam, transform, attach_to=self.vehicle)
 
@@ -99,6 +108,7 @@ class CarEnv:
 
         # sleep to get things started and to not detect a collision when the car spawns/falls from sky.
         # while self.front_camera is None:
+        #     time.sleep(0.01)
         time.sleep(2)
 
         colsensor = self.world.get_blueprint_library().find('sensor.other.collision')
@@ -132,66 +142,65 @@ class CarEnv:
     def collision_data(self, event):
         self.collision_hist.append(event)
 
+    def lane_cross_data(self, event):
+        self.lane_cross_hist.append(event)
+
     def process_img(self, image):
         i = np.array(image.raw_data)
-        #np.save("iout.npy", i)
         i2 = i.reshape((self.im_height, self.im_width, 4))
         i3 = i2[:, :, :3]
         if self.SHOW_CAM and self.queue.qsize() <= 1024:
             self.queue.put(i3)
-            # cv2.imshow("",i3)
-            # cv2.waitKey(1)
+            # print("images", self.queue.qsize())
         self.front_camera = i3.reshape(3, self.im_height, self.im_width)
 
-    def lane_cross_data(self, event):
-        self.lane_cross_hist.append(event)
-
     def step(self, action):
-        # print("steped. action {}".format(action))
-        # TODO: have more actions. Control throttle, steer and break saperatly.
+        # action is a contineous array. the first char is steer and the second is throttle.
+        # action 0 is break, and throttle, action 1 is steer
         '''
         For now let's just pass steer left, center, right?
         0, 1, 2
         '''
-        if action == 0:
+        print(action)
+        if action[0] < 0:
             self.vehicle.apply_control(
-                carla.VehicleControl(throttle=1.0, steer=0))
-        if action == 1:
-            self.vehicle.apply_control(carla.VehicleControl(
-                throttle=1.0, steer=-1*self.STEER_AMT))
-        if action == 2:
-            self.vehicle.apply_control(carla.VehicleControl(
-                throttle=1.0, steer=1*self.STEER_AMT))
+                carla.VehicleControl(throttle=0.0, steer=float(action[1]), brake=float(-action[0])))
+        elif action[0] > 0:
+            self.vehicle.apply_control(
+                carla.VehicleControl(throttle=float(action[0]), steer=float(action[1]), brake=0.0))
+        else:
+            self.vehicle.apply_control(
+                carla.VehicleControl(throttle=0.0, steer=float(action[1]), brake=0.0))
 
         v = self.vehicle.get_velocity()
         kmh = int(3.6 * np.sqrt(v.x**2 + v.y**2 + v.z**2))
 
         if len(self.collision_hist) != 0:
             done = True
-            reward = -1000
+            reward = -2000
 
         if len(self.lane_cross_hist) != 0:
             # We need to punish but there's no need to stop the game
-            done = True if len(self.collision_hist) > 0 else False
-            reward = -200
+            done = True  # True if len(self.collision_hist) > 0 else False
+            reward = -1000
 
         elif kmh < 50:
             done = False
-            reward = - (kmh / 10)
+            reward = -(50-kmh) * 10
         else:
             done = False
-            reward = 1
+            reward = 10
 
         if self.episode_start + SECONDS_PER_EPISODE < time.time():
-            print("time is over")
             done = True
 
-        return self.front_camera, reward, done, None  # state, reward, done, other_info
+        # state, reward, done, other_info
+        return self.front_camera, reward, done, None
 
-    def __del__(self):
+    def clear_all(self):
         print("destroying actors")
-
-        # if self.SHOW_CAM:
-        #     self.p.kill()
-
+        for sensor in self.sensor_list:
+            sensor.stop()
+        self.client.apply_batch([carla.command.DestroyActor(x)
+                                for x in self.actor_list])
         print("done.")
