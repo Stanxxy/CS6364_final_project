@@ -107,8 +107,6 @@ class CarEnv:
             carla.VehicleControl(throttle=0.0, brake=0.0))
 
         # sleep to get things started and to not detect a collision when the car spawns/falls from sky.
-        # while self.front_camera is None:
-        #     time.sleep(0.01)
         time.sleep(2)
 
         colsensor = self.world.get_blueprint_library().find('sensor.other.collision')
@@ -187,6 +185,7 @@ class CarEnv:
         elif kmh < 50:
             done = False
             reward = -(50-kmh) * 10
+
         else:
             done = False
             reward = 10

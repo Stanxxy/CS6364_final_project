@@ -89,11 +89,6 @@ class PolicyAgent:
         return model
 
     def update_record_memory(self, reward, prob):
-        # prob = prob.reshape(-1)
-        # if self.probs.size() != torch.Size([0]):
-        #     self.probs = torch.cat([self.probs, prob])
-        # else:
-        #     self.probs = prob
         self.probs.append(prob)
         self.rewards.append(reward)
 
@@ -132,7 +127,7 @@ class PolicyAgent:
                 self.last_log_episode = self.step
 
             self.rewards = []
-            self.probs = []
+            self.agent.probs = []
             # if log_this_step:
             #     self.target_update_counter += 1
 

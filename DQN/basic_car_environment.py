@@ -174,6 +174,7 @@ class CarEnv:
         elif kmh < 50:
             done = False
             reward = - (kmh / 10)
+
         else:
             done = False
             reward = 1

@@ -64,7 +64,7 @@ class Producer(multiprocessing.Process):
         EPSILON_DECAY = 0.95  # 0.9975 99975
         MIN_EPSILON = 0.001
 
-        AGGREGATE_STATS_EVERY = 10
+        AGGREGATE_STATS_EVERY = 1
         MIN_REWARD = -200
 
         FPS = 60

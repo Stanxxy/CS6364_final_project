@@ -1,5 +1,3 @@
-# import matplotlib.pyplot as plt
-import queue
 import carla
 import time
 import random
@@ -58,17 +56,14 @@ class CarEnv:
         self.model_3 = self.blueprint_library.filter('model3')[0]
         self.queue = queue
 
-        # if self.SHOW_CAM:
-        # TODO : add a command line parameter so we could start different view script for different agent
-        # self.p = subprocess.Popen(["python3.6", "imshow.py"])
-
     def reset(self):
         self.vehicle = None
         self.collision_hist = []
+        self.lane_cross_hist = []
         self.actor_list = []
         self.sensor_list = []  # use a sensor slist to stop before the object is recycled
         self.transform = random.choice(self.world.get_map().get_spawn_points())
-        # print(self.transform)
+
         counter = 0
         while self.vehicle is None:
             try:
@@ -86,15 +81,11 @@ class CarEnv:
         self.actor_list.append(self.vehicle)
 
         self.rgb_cam = self.world.get_blueprint_library().find('sensor.camera.rgb')
-        # TODO: We need depth camera here
-        # self.depth_cam = self.world.get_blueprint_library().find('sensor.camera.rgb')
-        # TODO: also config depth camera here
         self.rgb_cam.set_attribute('image_size_x', f'{self.im_width}')
         self.rgb_cam.set_attribute('image_size_y', f'{self.im_height}')
         self.rgb_cam.set_attribute('fov', '110')
 
         transform = carla.Transform(carla.Location(x=2.5, z=0.7))
-        #
         self.sensor = self.world.spawn_actor(
             self.rgb_cam, transform, attach_to=self.vehicle)
 
@@ -107,8 +98,6 @@ class CarEnv:
             carla.VehicleControl(throttle=0.0, brake=0.0))
 
         # sleep to get things started and to not detect a collision when the car spawns/falls from sky.
-        # while self.front_camera is None:
-        #     time.sleep(0.01)
         time.sleep(2)
 
         colsensor = self.world.get_blueprint_library().find('sensor.other.collision')
@@ -117,8 +106,6 @@ class CarEnv:
         self.actor_list.append(self.colsensor)
         self.sensor_list.append(self.colsensor)
         self.colsensor.listen(lambda event: self.collision_data(event))
-
-        self.lane_cross_hist = []
 
         lane_cross_sensor = self.world.get_blueprint_library().find(
             'sensor.other.lane_invasion')
@@ -146,6 +133,8 @@ class CarEnv:
         self.lane_cross_hist.append(event)
 
     def process_img(self, image):
+        if image is None:
+            return
         i = np.array(image.raw_data)
         i2 = i.reshape((self.im_height, self.im_width, 4))
         i3 = i2[:, :, :3]
@@ -161,10 +150,11 @@ class CarEnv:
         For now let's just pass steer left, center, right?
         0, 1, 2
         '''
-        print(action)
+        print("throttle: {}, steer: {}".format(action[0], action[1]))
         if action[0] < 0:
             self.vehicle.apply_control(
                 carla.VehicleControl(throttle=0.0, steer=float(action[1]), brake=float(-action[0])))
+
         elif action[0] > 0:
             self.vehicle.apply_control(
                 carla.VehicleControl(throttle=float(action[0]), steer=float(action[1]), brake=0.0))
@@ -181,15 +171,15 @@ class CarEnv:
 
         if len(self.lane_cross_hist) != 0:
             # We need to punish but there's no need to stop the game
-            done = True  # True if len(self.collision_hist) > 0 else False
-            reward = -1000
+            done = True if len(self.collision_hist) > 0 else False
+            reward = -500 * len(self.lane_cross_hist)
 
         elif kmh < 50:
             done = False
             reward = -(50-kmh) * 10
         else:
             done = False
-            reward = 1
+            reward = 10
 
         if self.episode_start + SECONDS_PER_EPISODE < time.time():
             done = True

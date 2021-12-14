@@ -1,7 +1,3 @@
-
-import ctypes
-
-from numpy.lib.type_check import imag
 from basic_car_environment import CarEnv
 from DQN_agent import DQNAgent, MODEL_NAME
 from threading import Thread
@@ -58,7 +54,7 @@ class Producer(multiprocessing.Process):
         EPSILON_DECAY = 0.95  # 0.9975 99975
         MIN_EPSILON = 0.001
 
-        AGGREGATE_STATS_EVERY = 10
+        AGGREGATE_STATS_EVERY = 1
         MIN_REWARD = -200
 
         FPS = 60
@@ -72,7 +68,9 @@ class Producer(multiprocessing.Process):
 
         # Memory fraction, used mostly when training multiple agents
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
         torch.cuda.set_per_process_memory_fraction(MEMORY_FRACTION, 0)
+
         agent = DQNAgent(device)
         # Create models folder
         if not os.path.isdir('models'):
